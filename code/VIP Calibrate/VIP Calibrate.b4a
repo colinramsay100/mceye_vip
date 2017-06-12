@@ -1,0 +1,1107 @@
+﻿Version=6.8
+NumberOfModules=2
+Module1=Starter
+Module2=Charts
+Build1=Default,b4a.vipcalibrate
+ManifestCode='This code will be applied to the manifest file during compilation.~\n~'You do not need to modify it in most cases.~\n~'See this link for for more information: http://www.b4x.com/forum/showthread.php?p=78136~\n~AddManifestText(~\n~<uses-sdk android:minSdkVersion="5" android:targetSdkVersion="19"/>~\n~<supports-screens android:largeScreens="true" ~\n~    android:normalScreens="true" ~\n~    android:smallScreens="true" ~\n~    android:anyDensity="true"/>)~\n~SetApplicationAttribute(android:icon, "@drawable/icon")~\n~SetApplicationAttribute(android:label, "$LABEL$")~\n~'End of default text.~\n~
+IconFile=
+NumberOfFiles=1
+File1=Calibrate.bal
+NumberOfLibraries=5
+Library1=core
+Library2=phone
+Library3=ejml
+Library4=audio
+Library5=javaobject
+@EndOfDesignText@
+#Region  Project Attributes 
+	#ApplicationLabel: VIP Calibrate
+	#VersionCode: 1
+	#VersionName: 
+	'SupportedOrientations possible values: unspecified, landscape or portrait.
+	#SupportedOrientations: landscape
+	#CanInstallToExternalStorage: False
+#End Region
+
+#Region  Activity Attributes 
+	#FullScreen: True
+	#IncludeTitle: False
+#End Region
+
+' Calibration app
+' The relationship between cd/m2 (LS-100) and lux (LX-1010) has already been calibrated and available to this app
+' Before running this program, the app needs to know the maximum required luminance
+' At present this is taken as 150cd/m2
+' The app measures luminance/brightness with pix=255 and selects brightness to give max 150cd/m2
+' Brightness test values are 1.0, .8, .6, .5, .4, .3
+' Then luminance / pixel is measured at that brightness
+' Test points concentrate around the required luminance test values 10cd/m2 to 80 cd/m2, say 8cd/m2 to 120cd/m2 but include 150cd/m2
+' Pixel values suggested are 255, 230, 200, 160, 110, 90, 75, 60, 0
+Sub Process_Globals
+	'These global variables will be declared once when the application starts.
+	'These variables can be accessed from all modules.
+	Dim  ph As Phone
+	Dim pw As PhoneWakeState
+	Dim Bee As Beeper
+	' To pass data points to chart use 
+	Dim NumSets As Int		' Number of sets of points for graph
+	Dim Xstep,Xstart As Float
+	Dim DataXY(4,10,2)		' up to 4 datasets each with up to 10 datapoints
+End Sub
+
+Sub Globals
+	'These global variables will be redeclared each time the activity is created.
+	'These variables can only be accessed from this module.
+	Dim pnlBlockPulldown As Panel
+	Dim lblXpinfo,lblYpinfo,lblXminfo,lblYminfo,lblVRFLinfo As Label
+	Dim lblXpixels,lblYpixels,lblXmm,lblYmm,lblVRFL As Label
+	Dim Xpixels,Ypixels,Xmm,Ymm,VRFL As Int
+	Dim Bright150 As Float
+	Dim lblLastReading As Label
+	Dim lblInfo As Label
+	Dim pnlPie, pnlLine1, pnlLine2, pnl2Lines, pnlBars, pnlStackedBars As Panel
+	Dim TabHost1 As TabHost
+	Dim btnExit As Button
+	Dim btnNext As Button
+	Dim lvReading As ListView
+	Dim smA, smB, smX As SimpleMatrix
+	Dim A(5,5),B(5,5),C(5,5) As Double
+	Dim R(5),Y(5) As Double
+	Dim RG(5),RB(5) As Double
+	Dim XY(8,2) As Double
+	Dim GreyTest(10) As Int
+	Dim GreyResult0(10) As Int
+	Dim GreyResult1(10) As Int
+	Dim BriResult(10) As Int
+	Dim BriTest(10) As Float
+	Dim pScreenWidth,pScreenHeight As Int
+	Dim rect As Rect
+	Dim cvsActivity As Canvas
+	Dim BrightSteps As Int
+	BrightSteps=10	
+	Dim Bright As Float
+	Bright=1.0
+	Dim BrightStep As Float
+	BrightStep=-1/BrightSteps
+	Dim Grey,GreyStep,GreySteps As Int
+	GreySteps=17
+	Grey=255
+	GreyStep=-15
+	Dim Greyscale As Double
+	Dim j,k As Int
+	Dim Test_Value As Float
+	Dim sp As String
+	Dim First As Boolean
+	First=True
+	Dim MaxLux As Int
+	Dim Reading As Int
+	Dim Test(4) As Boolean  	' Test(0) is to find MaxLux, Test(1) is to find Lux/Grey, Test(2) is to find Lux/Brightness
+	Dim TestsDone As Int
+	TestsDone=0
+	Dim ChecksDoneG As Int
+	ChecksDoneG=0
+	Dim ChecksDoneB As Int
+	ChecksDoneB=0
+	Dim Done0,Done1,Done2 As Boolean
+	Done0=False
+	Done1=False
+	Done2=False
+	Dim FixedData,Calavailable As Boolean
+	Calavailable=False
+	FixedData=True
+	Dim lbl As Int
+	Dim BTest As Double
+	Dim lens_factor As Float
+	lens_factor=0.85		' changed 26/5/17 was 0.81
+	Dim cdm_grad,cdm_const As Float
+	cdm_grad=0.863
+	cdm_const=2.273
+	Dim lv_shift As Int
+	lv_shift=-3
+End Sub
+
+Sub Activity_Create(FirstTime As Boolean)
+	'Do not forget to load the layout file created with the visual designer. For example:
+
+'	GreyTest=Array As Int(255,230,200,160,110,60,-1,-1,-1,-1)
+	GreyTest=Array As Int(255,230,200,160,130,110,90,70,-1,-1)
+	BriTest=Array As Float(1.0,.8,.6,.5,.4,.3,-1,-1,-1,-1)
+	Test=Array As Boolean(False,False,False,False)
+	lblLastReading.Initialize("lblLastReading")
+	lblInfo.Initialize("lblInfo")
+	btnExit.Initialize("btnExit")
+	btnNext.Initialize("btnNext")
+	Bee.Initialize(50,1000)
+	Activity.LoadLayout("Calibrate")
+	' Get the fixed data
+	cvsActivity.Initialize(Activity)
+	smA.Initialize(5,5)
+	smB.Initialize(5,1)
+	smX.Initialize(5,1)
+	ph.SetScreenBrightness(1.0)
+'	lvReading.Initialize("lvReading")
+'	For i = 0 To 500
+'		sp=i
+'        lvReading.AddSingleLine(sp)
+'    Next
+'	Activity.AddView(lvReading,90%x,10%y,10%x,90%y)
+'	lvReading.SetSelection(300)
+'	lvReading.Visible=False
+'	pnlBlockPulldown.Initialize("pnlBlockPulldown")
+'	Activity.AddView(pnlBlockPulldown,0%x,0%y,100%x,10%y)
+'	pnlBlockPulldown.Color=Colors.Black
+'	pnlBlockPulldown.BringToFront
+'	pnlBlockPulldown.Visible=True
+	Activity_WindowFocusChanged(True)
+	Activity.AddView(btnNext,75%x,70%y,15%x,30%y)
+	btnNext.Text="Next"
+	btnNext.TextSize=30
+	btnNext.Visible=False
+	Activity.AddView(lblLastReading,80%x,50%y,15%x,10%y)
+	lblLastReading.TextSize=30
+	lblLastReading.TextColor=Colors.White
+	lblLastReading.Visible=False
+	Activity.AddView(lblInfo,60%x,0%y,30%x,60%y)
+	lblInfo.TextSize=25
+	lblInfo.Text="Please mount the light sensor over the illuminated square then touch Next"
+	lblInfo.Visible=False
+
+	pScreenWidth=1280
+	pScreenHeight=720
+	pw.KeepAlive(True)
+	RG(0)= 22.303
+	RG(1)=-0.9608
+	RG(2)=0.01228
+	RG(3)=-0.0000526
+	RG(4)=0.000000105
+'	lblInfo.Text="tt"
+'	lblInfo.text=Find_Grey(100)
+'	WriteCal
+	CheckforCal
+'	CreateLineTab
+	Getfixed
+'	WriteCal
+'	FitLines(4)
+'testgraphs
+'	CreateLineTab
+'	Calibrate
+'	Test_Matrix
+'	Greyscale=Find_Grey(97.67)
+'	cvsActivity.DrawText(Greyscale,30,600,Typeface.DEFAULT_BOLD,20,Colors.Green,"LEFT")
+	Activity.Invalidate
+'	Test_Luminance
+'	Circle_Test
+End Sub
+
+Sub Activity_Resume
+
+End Sub
+
+Sub Activity_Pause (UserClosed As Boolean)
+
+End Sub
+
+Sub Find_Grey (Lumi As Double) As Double
+	' Finds the grey level which will give a required luminance
+	Dim g_try,g_step, err As Double
+'	g_try=230
+'	err=RG(0)+g_try*RG(1)+g_try*g_try*RG(2)+g_try*g_try*g_try*RG(3)+g_try*g_try*g_try*g_try*RG(4)
+'	lblInfo.Text=err
+	err=10
+	g_try=128
+	g_step=64
+	err=Lumi-(RG(0)+g_try*RG(1)+g_try*g_try*RG(2)+g_try*g_try*g_try*RG(3)+g_try*g_try*g_try*g_try*RG(4))
+	Do While Abs(err)>0.0001
+		If err>0 Then
+			g_try=g_try+g_step	
+		Else
+			g_try=g_try-g_step
+		End If
+		g_step=g_step/2
+		err=Lumi-(RG(0)+g_try*RG(1)+g_try*g_try*RG(2)+g_try*g_try*g_try*RG(3)+g_try*g_try*g_try*g_try*RG(4))
+	Loop
+'		 cvsActivity.DrawText(err,30,700,Typeface.DEFAULT_BOLD,20,Colors.Green,"LEFT")
+
+	Return g_try
+End Sub
+
+
+Sub Find_Bright (Lumi As Double) As Double
+	' finds the brightness which gives lumi cd/m2 at 255 pixel
+	Dim b_try,b_step, err As Double
+	err=10
+	b_try=0.5
+	b_step=0.25
+	err=Lumi-(RB(0)+b_try*RB(1)+b_try*b_try*RB(2)+b_try*b_try*b_try*RB(3)+b_try*b_try*b_try*b_try*RB(4))
+	Do While Abs(err)>0.001
+		If err>0 Then
+			b_try=b_try+b_step	
+		Else
+			b_try=b_try-b_step
+		End If
+		b_step=b_step/2
+		err=Lumi-(RB(0)+b_try*RB(1)+b_try*b_try*RB(2)+b_try*b_try*b_try*RB(3)+b_try*b_try*b_try*b_try*RB(4))
+	Loop
+	Return b_try	
+End Sub
+
+Sub lvReading_ItemClick (Position As Int, Value As Object)
+	If FixedData Then
+		Select lbl
+			Case 1
+				lblXpixels.Text=Value
+				lblXpixels.Color=Colors.LightGray
+			Case 2
+				lblYpixels.Text=Value
+				lblYpixels.Color=Colors.LightGray
+			Case 3
+				lblVRFL.Text=Value
+				lblVRFL.Color=Colors.LightGray
+			Case 4
+				lblXmm.Text=Value
+				lblXmm.Color=Colors.LightGray
+			Case 5
+				lblYmm.Text=Value
+				lblYmm.Color=Colors.LightGray
+		End Select
+		If (lblXpixels.Text<>"") And (lblYpixels.Text<>"") And (lblXmm.Text<>"") And (lblYmm.Text<>"") And (lblVRFL.Text<>"") Then
+			btnNext.Visible=True
+		End If	
+	Else
+		lblLastReading.Text=Value
+		Reading=Value
+		Select TestsDone
+			Case 0
+				BriResult(ChecksDoneB)=(Reading*0.863+2.273)*0.81		'y = 0.863x + 2.273	- convert lux to cd/m2 and multiply by lens factor 0.81
+			Case 1
+				GreyResult0(ChecksDoneG)=(Reading*0.863+2.273)*0.81		'y = 0.863x + 2.273	- convert lux to cd/m2 and multiply by lens factor 0.81
+		End Select
+	End If
+End Sub
+
+Sub Calibrate
+	' controls the calibration sequence
+	' first get the maximum Lux
+	' then the greyscale sequence
+	' then the brightness sequence
+	' set up screen for mounting light meter
+	ph.SetScreenBrightness(1.0)
+	rect.Initialize(0%x,0%y,55%x,100%y)
+	cvsActivity.DrawRect(rect,Colors.RGB(128,128,128),True,5)
+	lvReading.SetSelection(330)
+	Activity.Invalidate
+
+End Sub
+
+Sub btnNext_Click
+	' initially used for fixed data termination
+	' first time is after light meter is mounted
+	Dim g,h,lux As Int
+	Dim cdm,mm As Float
+	If FixedData Then		'  handle end of fixed data entry
+		FixedData=False
+		Xpixels=lblXpixels.text
+		Xmm=lblXmm.text
+		Ypixels=lblYpixels.text
+		Ymm=lblYmm.text
+		VRFL=lblVRFL.text
+		lvReading.Visible=False
+		lblInfo.Visible=True
+		lblLastReading.Visible=True
+		lblXpinfo.Visible=False
+		lblXpixels.Visible=False
+		lblYpinfo.Visible=False
+		lblYpixels.Visible=False
+		lblVRFLinfo.Visible=False
+		lblVRFL.Visible=False
+		lblXminfo.Visible=False
+		lblXmm.Visible=False
+		lblYminfo.Visible=False
+		lblYmm.Visible=False
+		rect.Initialize(0%x,0%y,100%x,100%y)
+		cvsActivity.DrawRect(rect,Colors.Black,True,5)
+		Activity.Invalidate
+		Calibrate
+	Else						' handle calibration process
+		If Not(First) And (lblLastReading.Text="") Then Return
+		If First Then
+			First=False
+			If Calavailable Then				
+				cdm=RB(0)+RB(1)+RB(2)+RB(3)+RB(4)		' calculate cd.m2 for brightness = 1.0
+				cdm=cdm/lens_factor						' remove lens factor
+				lux=(cdm-cdm_const)/cdm_grad+0.5		' convert to lux
+				lvReading.SetSelection(lux+lv_shift)
+			End If
+			lvReading.Visible=True
+			lblInfo.Text="Select meter reading from the list view after each beep."
+			cvsActivity.DrawRect(rect,Colors.RGB(255,255,255),True,5)
+			Activity.Invalidate
+			Bee.Beep
+			TestsDone=0
+			ChecksDoneG=0
+			ChecksDoneB=0
+		Else
+			Select TestsDone
+				Case 0			' now check lux/brightness at 255 pixel
+					If BriTest(ChecksDoneB+1)<>-1 Then
+						ChecksDoneB=ChecksDoneB+1
+						If Calavailable Then
+							mm=BriTest(ChecksDoneB)
+							cdm=RB(0)+RB(1)*mm+RB(2)*mm*mm+RB(3)*mm*mm*mm+RB(4)*mm*mm*mm*mm		' calculate cd.m2 for brightness 
+							cdm=cdm/lens_factor						' remove lens factor
+							lux=(cdm-cdm_const)/cdm_grad+0.5		' convert to lux
+							lvReading.SetSelection(lux+lv_shift)
+						End If
+						ph.SetScreenBrightness(BriTest(ChecksDoneB))
+						Bee.beep
+					Else						' done all checks for brightness
+						g=255
+						cvsActivity.DrawRect(rect,Colors.RGB(g,g,g),True,5)
+						Activity.Invalidate
+						TestsDone=1
+						Done0=True
+						If Calavailable Then
+							mm=GreyTest(ChecksDoneG)
+							cdm=RG(0)+RG(1)*mm+RG(2)*mm*mm+RG(3)*mm*mm*mm+RG(4)*mm*mm*mm*mm		' calculate cd.m2 for grey level
+							cdm=cdm/lens_factor						' remove lens factor
+							lux=(cdm-cdm_const)/cdm_grad+0.5		' convert to lux
+							lvReading.SetSelection(lux+lv_shift)
+						Else
+							lvReading.SetSelection(200)							
+						End If	
+						Bee.Beep					
+					End If
+				Case 1			' get Lux/grey at bright BTest
+					If GreyTest(ChecksDoneG+1)<>-1 Then
+'						lblInfo.Text=ChecksDoneG
+						ChecksDoneG=ChecksDoneG+1
+						If Calavailable Then
+							mm=GreyTest(ChecksDoneG)
+							cdm=RG(0)+RG(1)*mm+RG(2)*mm*mm+RG(3)*mm*mm*mm+RG(4)*mm*mm*mm*mm		' calculate cd.m2 for grey level
+							cdm=cdm/lens_factor						' remove lens factor
+							lux=(cdm-cdm_const)/cdm_grad+0.5		' convert to lux
+							If (lux+lv_shift)<0 Then lux=-lv_shift
+							lvReading.SetSelection(lux+lv_shift)
+						End If						
+						g=GreyTest(ChecksDoneG)
+						cvsActivity.DrawRect(rect,Colors.RGB(g,g,g),True,5)
+						Activity.Invalidate
+						lblLastReading.Text=""
+						Bee.beep
+					Else						' done all checks for grey test
+						TestsDone=2
+						Done1=True
+'						ChecksDoneG=0
+						g=255
+						cvsActivity.DrawRect(rect,Colors.RGB(g,g,g),True,5)
+						Activity.Invalidate
+						Bee.beep					
+						ph.SetScreenBrightness(1.0)
+					End If
+			End Select			
+		End If
+		lblLastReading.Text=""
+		If Done0 Then				' completed luminance/brightness
+			Done0=False
+			For i=0 To ChecksDoneB 
+				XY(i,0)=BriTest(i)
+				XY(i,1)=BriResult(i)	'*0.863+2.273	'y = 0.863x + 2.273	- convert lux to cd/m2
+			Next
+'			lblLastReading.Text=ChecksDoneB
+			Activity.Invalidate
+			FitLines(ChecksDoneB+1)
+			RB(0)=R(0)
+			RB(1)=R(1)
+			RB(2)=R(2)
+			RB(3)=R(3)
+			RB(4)=R(4)		
+			' now luminance=RB(0)+RB(1)*B+RB(2)*B*B+RB(3)*B*B*B+RB(4)*B*B*B*B
+			BTest=Find_Bright(150)	' find the brightness to give maximum 150cd/m2
+			ph.SetScreenBrightness(BTest)
+		End If
+		If Done1 Then
+			Done1=False
+			For i=0 To ChecksDoneG 
+				XY(i,0)=GreyTest(i)
+				XY(i,1)=GreyResult0(i)	'*0.863+2.273	'y = 0.863x + 2.273	- convert lux to cd/m2
+			Next
+			FitLines(ChecksDoneG+1)
+			RG(0)=R(0)
+			RG(1)=R(1)
+			RG(2)=R(2)
+			RG(3)=R(3)
+			RG(4)=R(4)		
+'			lblLastReading.Text="t" & RG(0)
+			CreateLineTab
+		End If
+	End If
+End Sub
+
+Sub FitLines(ind As Int)
+	Dim sigx,sigx2,sigx3,sigx4,sigx5,sigx6,sigx7,sigx8,s,t,u As Double
+	Dim sigy,sigxy,sigx2y,sigx3y,sigx4y As Double
+	' need to convert Lux to cd/m2
+	' relation (measured) is cd/m2 = 0.910 * Lux - 0.247
+	sigx=0
+	sigx2=0
+	sigx3=0
+	sigx4=0
+	sigx5=0
+	sigx6=0
+	sigx7=0
+	sigx8=0
+	sigy=0
+	sigxy=0
+	sigx2y=0
+	sigx3y=0
+	sigx4y=0
+
+'	XY(0,0)=1.0
+'	XY(0,1)=330
+'	XY(1,0)=.8
+'	XY(1,1)=273
+'	XY(2,0)=.6
+'	XY(2,1)=212
+'	XY(3,0)=.4
+'	XY(3,1)=145
+'	XY(4,0)=.2
+'	XY(4,1)=74
+'	XY(5,0)=0
+'	XY(5,1)=3
+
+'	XY(0,0)=255
+'	XY(0,1)=332
+'	XY(1,0)=230
+'	XY(1,1)=230
+'	XY(2,0)=200
+'	XY(2,1)=159
+'	XY(3,0)=160
+'	XY(3,1)=86
+'	XY(4,0)=110
+'	XY(4,1)=34
+'	XY(5,0)=60
+'	XY(5,1)=4
+	' now calculate the elements of the matrix
+	For i=0 To ind-1
+		s=XY(i,0)
+		t=s
+		u=XY(i,1)
+		sigx=sigx+t
+		sigy=sigy+u	
+		sigxy=sigxy+t*u		
+		t=t*s
+		sigx2=sigx2+t
+		sigx2y=sigx2y+t*u
+		t=t*s
+		sigx3=sigx3+t
+		sigx3y=sigx3y+t*u
+		t=t*s
+		sigx4=sigx4+t
+		sigx4y=sigx4y+t*u
+		t=t*s
+		sigx5=sigx5+t
+		t=t*s
+		sigx6=sigx6+t
+		t=t*s
+		sigx7=sigx7+t
+		t=t*s
+		sigx8=sigx8+t		
+	Next
+	
+	' load matrix
+	A(0,0)=ind
+	A(0,1)=sigx
+	A(0,2)=sigx2
+	A(0,3)=sigx3
+	A(0,4)=sigx4	
+	
+	smA.SetElement(0,0,ind)
+	smA.SetElement(0,1,sigx)
+	smA.SetElement(0,2,sigx2)
+	smA.SetElement(0,3,sigx3)
+	smA.SetElement(0,4,sigx4)
+
+	A(1,0)=sigx
+	A(1,1)=sigx2
+	A(1,2)=sigx3
+	A(1,3)=sigx4
+	A(1,4)=sigx5
+	
+	smA.SetElement(1,0,sigx)
+	smA.SetElement(1,1,sigx2)
+	smA.SetElement(1,2,sigx3)
+	smA.SetElement(1,3,sigx4)
+	smA.SetElement(1,4,sigx5)
+
+	A(2,0)=sigx2
+	A(2,1)=sigx3
+	A(2,2)=sigx4
+	A(2,3)=sigx5
+	A(2,4)=sigx6
+	
+	smA.SetElement(2,0,sigx2)
+	smA.SetElement(2,1,sigx3)
+	smA.SetElement(2,2,sigx4)
+	smA.SetElement(2,3,sigx5)
+	smA.SetElement(2,4,sigx6)
+
+	A(3,0)=sigx3
+	A(3,1)=sigx4
+	A(3,2)=sigx5
+	A(3,3)=sigx6
+	A(3,4)=sigx7
+
+	smA.SetElement(3,0,sigx3)
+	smA.SetElement(3,1,sigx4)
+	smA.SetElement(3,2,sigx5)
+	smA.SetElement(3,3,sigx6)
+	smA.SetElement(3,4,sigx7)
+
+	A(4,0)=sigx4
+	A(4,1)=sigx5
+	A(4,2)=sigx6
+	A(4,3)=sigx7
+	A(4,4)=sigx8
+
+	smA.SetElement(4,0,sigx4)
+	smA.SetElement(4,1,sigx5)
+	smA.SetElement(4,2,sigx6)
+	smA.SetElement(4,3,sigx7)
+	smA.SetElement(4,4,sigx8)
+
+	' Load Y vector
+	Y(0)=sigy
+	Y(1)=sigxy
+	Y(2)=sigx2y
+	Y(3)=sigx3y
+	Y(4)=sigx4y
+	
+	smB.SetElement(0,0,sigy)
+	smB.SetElement(1,0,sigxy)
+	smB.SetElement(2,0,sigx2y)
+	smB.SetElement(3,0,sigx3y)
+	smB.SetElement(4,0,sigx4y)
+		 
+	 smX=smA.Solve(smB)
+	 
+	' store coefficients in R() for convenience
+	R(0)=smX.GetElement(0,0)
+	R(1)=smX.GetElement(1,0)
+	R(2)=smX.GetElement(2,0)
+	R(3)=smX.GetElement(3,0)
+	R(4)=smX.GetElement(4,0)
+	
+'	If Done1 Then
+'		For i=0 To 4
+'			RG(i)=R(i)
+'		Next
+'	End If
+'	If Done0 Then
+'		For i=0 To 4
+'			RB(i)=R(i)
+'		Next
+'	End If
+'	Done0=False
+'	Done1=False
+
+'lblInfo.text=R(0)
+'lblInfo.Text=R(0)+R(1)*255+R(2)*255*255+R(3)*255*255*255+R(4)*255*255*255*255
+'lblLastReading.text=R(0)+R(1)*60+R(2)*60*60+R(3)*60*60*60+R(4)*60*60*60*60
+'Activity.Invalidate
+
+End Sub
+
+Sub CreateLineTab
+	Dim p As Panel
+	Dim m As Float
+	btnNext.Visible=False
+	lblInfo.Visible=False
+	lvReading.Visible=False
+	rect.Initialize(0%x,0%y,100%x,100%y)
+	cvsActivity.DrawRect(rect,Colors.Black,True,5)
+	Activity.Invalidate
+
+	TabHost1.Initialize("TabHost1")
+	Activity.AddView(TabHost1, 0, 0, 100%x, 100%y)
+
+	p.Initialize("")
+	pnlLine1.Initialize("pnlLine1")
+'	p.AddView(pnlLine1, 0, 0, 40%x, 100%y - 100dip)
+	p.AddView(pnlLine1, 55%x, 0, 40%x, 100%y - 100dip)
+	Activity.AddView(btnExit,45%x,90%y,10%x,10%y)
+	btnExit.Text="Exit"
+	btnExit.color=Colors.Gray
+	btnExit.Visible=True
+	TabHost1.AddTab2("Calibration Results", p)
+	Dim LD As LineData
+	LD.Initialize
+	LD.Target = pnlLine1
+	Charts.AddLineColor(LD, Colors.Red)
+	For i = 0 To 255 Step 5
+		m=RG(0)+RG(1)*i+RG(2)*i*i+RG(3)*i*i*i+RG(4)*i*i*i*i
+		Charts.AddLinePoint(LD, i, m, i Mod 50 = 0)
+	Next
+	Xstep=5
+	Xstart=12
+'	lblLastReading.Text=m
+	Dim G As Graph
+	G.Initialize
+	G.Title = "Luminance / Pixel"
+	G.XAxis = "Pixel"
+	G.YAxis = "cd/m2"
+	G.YStart = 0
+	G.YEnd = 160
+	G.YInterval = 20
+	G.AxisColor = Colors.Black
+	' load point data
+	' DataXY(4,10,2)
+	NumSets=1
+'	DataXY(0,0,0)=255
+'	DataXY(0,0,1)=337
+'	DataXY(0,1,0)=230
+'	DataXY(0,1,1)=232
+'	DataXY(0,2,0)=200
+'	DataXY(0,2,1)=159
+'	DataXY(0,3,0)=160
+'	DataXY(0,3,1)=84
+'	DataXY(0,4,0)=110
+'	DataXY(0,4,1)=34
+'	DataXY(0,5,0)=60
+'	DataXY(0,5,1)=6
+
+	DataXY(0,0,0)=GreyTest(0)
+	DataXY(0,0,1)=GreyResult0(0)
+	DataXY(0,1,0)=GreyTest(1)
+	DataXY(0,1,1)=GreyResult0(1)
+	DataXY(0,2,0)=GreyTest(2)
+	DataXY(0,2,1)=GreyResult0(2)
+	DataXY(0,3,0)=GreyTest(3)
+	DataXY(0,3,1)=GreyResult0(3)
+	DataXY(0,4,0)=GreyTest(4)
+	DataXY(0,4,1)=GreyResult0(4)
+	DataXY(0,5,0)=GreyTest(5)
+	DataXY(0,5,1)=GreyResult0(5)
+	DataXY(0,6,0)=GreyTest(6)
+	DataXY(0,6,1)=GreyResult0(6)
+	DataXY(0,7,0)=GreyTest(7)
+	DataXY(0,7,1)=GreyResult0(7)
+	DataXY(0,8,0)=GreyTest(8)
+	DataXY(0,8,1)=GreyResult0(8)
+	DataXY(0,8,0)=-1
+	
+'	DataXY(1,0,0)=255
+'	DataXY(1,0,1)=113*337/113
+'	DataXY(1,1,0)=230
+'	DataXY(1,1,1)=77*337/113
+'	DataXY(1,2,0)=200
+'	DataXY(1,2,1)=53*337/113
+'	DataXY(1,3,0)=160
+'	DataXY(1,3,1)=27*337/113
+'	DataXY(1,4,0)=110
+'	DataXY(1,4,1)=7*337/113
+'	DataXY(1,5,0)=60
+'	DataXY(1,5,1)=0*337/113
+'	
+'	
+'	DataXY(1,0,0)=GreyTest(0)
+'	DataXY(1,0,1)=GreyResult1(0)
+'	DataXY(1,1,0)=GreyTest(1)
+'	DataXY(1,1,1)=GreyResult1(1)
+'	DataXY(1,2,0)=GreyTest(2)
+'	DataXY(1,2,1)=GreyResult1(2)
+'	DataXY(1,3,0)=GreyTest(3)
+'	DataXY(1,3,1)=GreyResult1(3)
+'	DataXY(1,4,0)=GreyTest(4)
+'	DataXY(1,4,1)=GreyResult1(4)
+'	DataXY(1,5,0)=GreyTest(5)
+'	DataXY(1,5,1)=GreyResult1(5)
+'	DataXY(1,6,0)=-1
+	Charts.DrawLineChart(G, LD, Colors.White)
+'	lblInfo.Text=RG(0)
+	
+	' Add second line chart on right for cd/m2/brightness
+	Dim LD2 As LineData
+	Dim w As Float
+	pnlLine2.Initialize("pnlLine2")
+'	p.AddView(pnlLine2, 55%x, 0, 40%x, 100%y - 100dip)
+	p.AddView(pnlLine2, 0, 0, 40%x, 100%y - 100dip)
+	LD.Initialize
+	LD.Target = pnlLine2
+	Charts.AddLineColor(LD, Colors.Green)
+	For i = 0 To 10 Step 1
+		w=i/10
+		
+		m=RB(0)+RB(1)*w+RB(2)*w*w+RB(3)*w*w*w+RB(4)*w*w*w*w
+'		Charts.AddLinePoint(LD, i, m, i*10 Mod 1 = 0)
+		Charts.AddLinePoint(LD, i, m, i Mod 2 = 0)
+	Next
+	Xstep=0.1
+	Xstart=3
+'	lblLastReading.Text=m
+	Dim G2 As Graph
+	G2.Initialize
+	G2.Title = "Luminance / Brightness"
+	G2.XAxis = "Brightness * 10"
+	G2.YAxis = "cd/m2"
+	G2.YStart = 0
+	G2.YEnd = 350
+	G2.YInterval = 50
+	G2.AxisColor = Colors.Black
+'	' load point data
+'	' DataXY(4,10,2)Flbl
+	NumSets=1
+'	DataXY(0,0,0)=1
+'	DataXY(0,0,1)=339
+'	DataXY(0,1,0)=.8
+'	DataXY(0,1,1)=280
+'	DataXY(0,2,0)=.6
+'	DataXY(0,2,1)=218
+'	DataXY(0,3,0)=.5
+'	DataXY(0,3,1)=184
+'	DataXY(0,4,0)=.4
+'	DataXY(0,4,1)=150
+'	DataXY(0,5,0)=.3
+'	DataXY(0,5,1)=113
+
+	DataXY(0,0,0)=BriTest(0)
+	DataXY(0,0,1)=BriResult(0)
+	DataXY(0,1,0)=BriTest(1)
+	DataXY(0,1,1)=BriResult(1)
+	DataXY(0,2,0)=BriTest(2)
+	DataXY(0,2,1)=BriResult(2)
+	DataXY(0,3,0)=BriTest(3)
+	DataXY(0,3,1)=BriResult(3)
+	DataXY(0,4,0)=BriTest(4)
+	DataXY(0,4,1)=BriResult(4)
+	DataXY(0,5,0)=BriTest(5)
+	DataXY(0,5,1)=BriResult(5)
+	DataXY(0,6,0)=-1
+	Charts.DrawLineChart(G2, LD, Colors.White)
+	WriteCal
+End Sub
+
+Sub testgraphs
+	btnNext.Visible=False
+	XY(0,0)=255
+	XY(0,1)=337
+	XY(1,0)=230
+	XY(1,1)=232
+	XY(2,0)=200
+	XY(2,1)=159
+	XY(3,0)=160
+	XY(3,1)=84
+	XY(4,0)=110
+	XY(4,1)=34
+	XY(5,0)=60
+	XY(5,1)=6
+	FitLines(ChecksDoneG+1)
+	RG(0)=R(0)
+	RG(1)=R(1)
+	RG(2)=R(2)
+	RG(3)=R(3)
+	RG(4)=R(4)		
+
+	XY(0,0)=1
+	XY(0,1)=339
+	XY(1,0)=.8
+	XY(1,1)=280
+	XY(2,0)=.6
+	XY(2,1)=218
+	XY(3,0)=.5
+	XY(3,1)=184
+	XY(4,0)=.4
+	XY(4,1)=150
+	XY(5,0)=.3
+	XY(5,1)=113
+	FitLines(ChecksDoneB+1)
+	RB(0)=R(0)
+	RB(1)=R(1)
+	RB(2)=R(2)
+	RB(3)=R(3)
+	RB(4)=R(4)		
+	CreateLineTab
+	WriteCal
+'lblInfo.Text=RB(1)
+'lblLastReading.Text=RB(0)
+End Sub
+
+Sub Getfixed
+	' First stage get the phone and VR box fixed data
+	lvReading.Initialize("lvReading")
+	For i = 0 To 1500
+		sp=i
+        lvReading.AddSingleLine(sp)
+    Next
+	Activity.AddView(lvReading,90%x,10%y,10%x,90%y)
+	lvReading.Visible=False
+	rect.Initialize(0%x,0%y,100%x,100%y)
+	cvsActivity.DrawRect(rect,Colors.Gray,False,2%x)
+	lblXpixels.Initialize("lblXpixels")
+	lblYpixels.Initialize("lblYpixels")
+	lblXmm.Initialize("lblXmm")
+	lblYmm.Initialize("lblYmm")
+	lblVRFL.Initialize("lblVRFL")
+	Activity.AddView(lblXpixels,10%x,30%y,15%x,10%y)
+	Activity.AddView(lblYpixels,35%x,30%y,15%x,10%y)
+	Activity.AddView(lblXmm,10%x,70%y,15%x,10%y)
+	Activity.AddView(lblYmm,35%x,70%y,15%x,10%y)
+	Activity.AddView(lblVRFL,60%x,30%y,15%x,10%y)
+	lblXpixels.Color=Colors.Gray
+	lblXpixels.TextColor=Colors.Black
+	lblXpixels.TextSize=25
+	lblYpixels.Color=Colors.Gray
+	lblYpixels.TextColor=Colors.Black
+	lblYpixels.TextSize=25
+	lblXmm.Color=Colors.Gray
+	lblXmm.TextColor=Colors.Black
+	lblXmm.TextSize=25
+	lblYmm.Color=Colors.Gray
+	lblYmm.TextColor=Colors.Black
+	lblYmm.TextSize=25
+	lblVRFL.Color=Colors.Gray
+	lblVRFL.TextColor=Colors.Black
+	lblVRFL.TextSize=25
+	lblXpixels.Visible=True
+	lblXpixels.Text=""
+	lblXpinfo.Initialize("lblXpinfo")
+	Activity.AddView(lblXpinfo,8%x,12%y,25%x,20%y)
+	lblXpinfo.TextSize=20   
+	lblXpinfo.Text="Screen width    (pixels)"
+	lblXpinfo.Visible=True
+	lblYpinfo.Initialize("lblYpinfo")
+	Activity.AddView(lblYpinfo,33%x,12%y,25%x,20%y)
+	lblYpinfo.TextSize=20   
+	lblYpinfo.Text="Screen height (pixels)"
+	lblYpinfo.Visible=True
+	lblXminfo.Initialize("lblXminfo")
+	Activity.AddView(lblXminfo,8%x,53%y,25%x,20%y)
+	lblXminfo.TextSize=20   
+	lblXminfo.Text="Screen width (mm)"
+	lblYminfo.Initialize("lblYminfo")
+	Activity.AddView(lblYminfo,33%x,53%y,25%x,20%y)
+	lblYminfo.TextSize=20   
+	lblYminfo.Text="Screen height (mm)"
+	lblYminfo.Visible=True
+	lblVRFLinfo.Initialize("lblVRFLinfo")
+	Activity.AddView(lblVRFLinfo,58%x,12%y,25%x,20%y)
+	lblVRFLinfo.TextSize=20   
+	lblVRFLinfo.Text="VR focal length (mm)"	
+	Activity.Invalidate
+End Sub
+
+
+Sub lblXpixels_Click
+	lbl=1
+	lvReading.Visible=True
+	If Calavailable Then
+		lvReading.SetSelection(Xpixels)
+	Else
+		lvReading.SetSelection(1280)
+	End If
+	lblXpixels.Color=Colors.White
+End Sub
+
+Sub lblYpixels_Click
+	lbl=2
+	lvReading.Visible=True
+	If Calavailable Then
+		lvReading.SetSelection(Ypixels)
+	Else
+		lvReading.SetSelection(720)
+	End If
+	lblYpixels.Color=Colors.White
+End Sub
+
+Sub lblXmm_Click
+	lbl=4
+	lvReading.Visible=True
+	If Calavailable Then
+		lvReading.SetSelection(Xmm)
+	Else
+		lvReading.SetSelection(111)
+	End If
+	lblXmm.Color=Colors.White
+End Sub
+
+Sub lblYmm_Click
+	lbl=5
+	lvReading.Visible=True
+	If Calavailable Then
+		lvReading.SetSelection(Ymm)
+	Else
+		lvReading.SetSelection(62)
+	End If
+	lblYmm.Color=Colors.White
+End Sub
+
+Sub lblVRFL_Click
+	lbl=3
+	lvReading.Visible=True
+	If Calavailable Then
+		lvReading.SetSelection(VRFL)
+	Else
+		lvReading.SetSelection(44)
+	End If
+	lblVRFL.Color=Colors.White
+End Sub
+
+Sub WriteCal
+	' put all results in Calibration.txt file
+	Private Writer As TextWriter
+	Dim s0,s1,s2,s3,s4,s5 As String
+	Dim cd,cdb,g,dB As Double
+	Dim back As Int
+	If File.Exists(File.DirRootExternal, "Calibration.txt") Then
+		File.Delete(File.DirRootExternal, "Calibration.txt")
+	End If
+	Writer.Initialize(File.OpenOutput(File.DirRootExternal, "Calibration.txt", False))
+	Writer.WriteLine(Xpixels & ", " & Ypixels)
+	Writer.WriteLine(Xmm & ", " & Ymm)
+	Writer.WriteLine(VRFL)
+	Bright150=BTest
+	s0=Bright150
+	Writer.WriteLine(s0)
+	s0=RB(0)
+	s1=RB(1)
+	s2=RB(2)
+	s3=RB(3)
+	s4=RB(4)
+	Writer.WriteLine(s0 & ", " & s1 & ", " & s2 & ", " & s3 & ", " & s4)
+	s0=RG(0)
+	s1=RG(1)
+	s2=RG(2)
+	s3=RG(3)
+	s4=RG(4)
+	Writer.WriteLine(s0 & ", " & s1 & ", " & s2 & ", " & s3 & ", " & s4)
+	' put out the pixel value to use for background - nearest integer and what cd/m2 that will be
+	g=Find_Grey(10)
+	back=g+0.5
+	cdb=RG(0)+RG(1)*back+RG(2)*back*back+RG(3)*back*back*back+RG(4)*back*back*back*back
+	s0=g
+	s1=back
+	s2=cdb
+	Writer.WriteLine(s0 & ", " & s1 & ", " & s2 & CRLF)
+	Writer.Close
+		
+	If File.Exists(File.DirRootExternal, "dBs.txt") Then
+		File.Delete(File.DirRootExternal, "dBs.txt")
+	End If
+	Writer.Initialize(File.OpenOutput(File.DirRootExternal, "dBs.txt", False))
+	Writer.WriteLine("Background  " & s0 & ", " & s1 & ", " & s2 & CRLF)
+	Writer.WriteLine("dB         	cd/m2             Pixel value")
+	For i=14 To 35
+		cd=10+3183/Power(10,i/10)
+		g=Find_Grey(cd)
+		Writer.WriteLine(i & ", " & cd & ", " & g & CRLF)
+	Next	
+	Writer.WriteLine(CRLF)
+	' output the cd/m2 and dB for each pixel value in use
+	Writer.WriteLine("Pixel value         	cd/m2            dB" & CRLF)
+	For i=back+1 To 255
+		cd=RG(0)+RG(1)*i+RG(2)*i*i+RG(3)*i*i*i+RG(4)*i*i*i*i
+		g=3183/(cd-cdb)
+		dB=10*Logarithm(g,10)
+		Writer.WriteLine(i & ", " & cd & ", " & dB & CRLF)
+	Next	
+	Writer.Close
+End Sub
+
+Sub Activity_WindowFocusChanged(HasFocus As Boolean)              ' removes navigation/action bar at bottom but doesn't allow use of screen
+ 	If HasFocus Then
+   		Dim jo As JavaObject = Activity
+   		jo.RunMethod("setSystemUiVisibility", Array As Object(5894)) '3846 - non-sticky
+	End If
+End Sub
+
+Sub pnlBlockPulldown_Click
+End Sub
+
+Sub CheckforCal
+	' At start of app checks to see if existing file - if so read and use values as ballpark
+	If File.Exists(File.DirRootExternal, "Calibration.txt") Then
+		Calavailable=True
+		ReadCalibration
+	End If
+
+End Sub
+
+Sub ReadCalibration
+	' Read in the calibration data
+	Private comma As Int
+	Private Reader As TextReader
+	Private line As String
+	Private Calibration(7) As String
+	Private p As String
+	Private t As String
+	Private s As String
+	Private w,u As Double
+'	Private c As Int
+	Private cd,g As Float
+	DateTime.DateFormat = "yyMMddHHmmss"
+'	CalDate = DateTime.Date(File.LastModified(File.DirRootExternal,"Calibration.txt"))
+
+	Reader.Initialize(File.OpenInput(File.DirRootExternal,"Calibration.txt"))
+	' get Xpixel, Ypixel
+	line = Reader.ReadLine
+	Calibration(0)=line
+	comma=line.IndexOf(",")
+	Xpixels=line.SubString2(0,comma)
+	Ypixels=line.SubString(comma+1)
+	' get Xmm, Ymm
+	line = Reader.ReadLine
+	Calibration(1)=line
+	comma=line.IndexOf(",")
+	Xmm=line.SubString2(0,comma)
+	Ymm=line.SubString(comma+1)
+	' get VRFL
+	line = Reader.ReadLine
+	Calibration(2)=line
+	VRFL=line
+	' get Btest
+	line = Reader.ReadLine
+	Calibration(3)=line
+	BTest=line
+	' get brightness line coefficients
+	line = Reader.ReadLine
+	Calibration(4)=line
+	For i=0 To 3
+		comma=line.IndexOf(",")
+		RB(i)=line.SubString2(0,comma)
+		line=line.SubString(comma+1)
+	Next
+	RB(4)=line
+	' get greyscale line coefficients
+	line = Reader.ReadLine
+	Calibration(5)=line
+	For i=0 To 3
+		comma=line.IndexOf(",")
+		RG(i)=line.SubString2(0,comma)
+		line=line.SubString(comma+1)
+	Next
+	RG(4)=line
+	' get required grey for 10cd/m2, nearest integer value, actual cd/m2 value
+	line = Reader.ReadLine
+	Calibration(6)=line
+	comma=line.IndexOf(",")
+'	back_correct=line.SubString2(0,comma)
+	line=line.SubString(comma+1)
+	comma=line.IndexOf(",")
+'	back=line.SubString2(0,comma)
+'	back_cd_actual=line.SubString(comma+1)
+	' Calculate the dB values for dB()
+'	For i=back+1 To 255
+'		cd=RG(0)+RG(1)*i+RG(2)*i*i+RG(3)*i*i*i+RG(4)*i*i*i*i
+'		g=3183/(cd-back_cd_actual)
+'		dB(i)=10*Logarithm(g,10)
+'	Next	
+'	backcol=Colors.RGB(back,back,back)
+'	ph.SetScreenBrightness(BTest)
+'	w=RG(0)+RG(1)*backcol+RG(2)*backcol*backcol+RG(3)*backcol*backcol*backcol+RG(4)*backcol*backcol*backcol*backcol
+'	cvsActivity.DrawText(dB(back+1) & "   " & dB(255) & "   " & back, 0, 200, Typeface.DEFAULT, 20, Colors.Green, "LEFT")
+'	Activity.Invalidate
+	Reader.close
+End Sub
+
+Sub btnExit_Click
+	ExitApplication
+End Sub
